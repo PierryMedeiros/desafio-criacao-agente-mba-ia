@@ -17,4 +17,4 @@ ARQUIVO_SESSOES = DIR_VAR / "sessoes.db"
 ARQUIVO_REGULAMENTO = DIR_DADOS_INICIAIS / "regulamento.md"
 
 APP_NAME = "residencial_aurora"
-MODELO = os.getenv("AURORA_MODELO", "gemini-2.5-flash-lite")
+MODELO = os.getenv("AURORA_MODELO") or "gemini-3.1-flash-lite"
