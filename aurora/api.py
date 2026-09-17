@@ -9,7 +9,6 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from google.adk.flows.llm_flows.functions import REQUEST_CONFIRMATION_FUNCTION_CALL_NAME
-from google.adk.runners import Runner
 from google.adk.sessions.sqlite_session_service import SqliteSessionService
 from google.genai import types
 from pydantic import BaseModel
@@ -17,6 +16,7 @@ from pydantic import BaseModel
 from aurora import condominio
 from aurora.agentes import app as adk_app
 from aurora.config import APP_NAME, ARQUIVO_CONDOMINIO, ARQUIVO_SESSOES, DIR_VAR
+from aurora.runner import AuroraRunner, confirmacao_em_resposta
 from aurora.tools import CHAVE_APARTAMENTO
 
 # O apartamento fica no state da sessão; o user_id do ADK é fixo porque a
@@ -25,7 +25,7 @@ USER_ID = "morador"
 
 DIR_VAR.mkdir(parents=True, exist_ok=True)
 session_service = SqliteSessionService(str(ARQUIVO_SESSOES))
-runner = Runner(app=adk_app, session_service=session_service)
+runner = AuroraRunner(app=adk_app, session_service=session_service)
 
 # Uma execução por sessão de cada vez: evita que duas respostas para a mesma
 # confirmação sejam processadas em paralelo.
@@ -101,21 +101,40 @@ def confirmacoes_pendentes(sessao) -> list[dict]:
     return pendentes
 
 
+def _texto_do_resultado(resultado: dict) -> str:
+    if resultado.get("erro"):
+        return resultado["erro"]
+    if resultado.get("mensagem"):
+        return resultado["mensagem"]
+    return ""
+
+
 async def _executar(session_id: str, mensagem: types.Content) -> dict:
-    textos = []
-    async for evento in runner.run_async(
+    antes = len((await _sessao(session_id)).events)
+    async for _ in runner.run_async(
         user_id=USER_ID, session_id=session_id, new_message=mensagem
     ):
-        if evento.partial or not evento.content or evento.author == "user":
+        pass
+    sessao = await _sessao(session_id)
+
+    textos = []
+    ultimo_resultado: dict = {}
+    for evento in sessao.events[antes:]:
+        if not evento.content or evento.author == "user":
             continue
         for parte in evento.content.parts or []:
             if parte.text and not parte.thought:
                 textos.append(parte.text.strip())
-    sessao = await _sessao(session_id)
-    return {
-        "resposta": "\n\n".join(t for t in textos if t),
-        "confirmacoes_pendentes": confirmacoes_pendentes(sessao),
-    }
+            resposta_tool = parte.function_response
+            if resposta_tool and isinstance(resposta_tool.response, dict):
+                ultimo_resultado = resposta_tool.response
+
+    pendentes = confirmacoes_pendentes(sessao)
+    resposta = "\n\n".join(t for t in textos if t)
+    if not resposta and not pendentes:
+        # O modelo às vezes encerra sem texto; usa a mensagem da última tool.
+        resposta = _texto_do_resultado(ultimo_resultado)
+    return {"resposta": resposta, "confirmacoes_pendentes": pendentes}
 
 
 @app.post("/sessoes", status_code=201)
@@ -154,7 +173,11 @@ async def responder_confirmacao(session_id: str, corpo: RespostaConfirmacao):
             response={"confirmed": corpo.confirmado},
         )
         mensagem = types.Content(role="user", parts=[types.Part(function_response=resposta)])
-        return await _executar(session_id, mensagem)
+        token = confirmacao_em_resposta.set(corpo.id)
+        try:
+            return await _executar(session_id, mensagem)
+        finally:
+            confirmacao_em_resposta.reset(token)
 
 
 @app.get("/sessoes/{session_id}/eventos")
