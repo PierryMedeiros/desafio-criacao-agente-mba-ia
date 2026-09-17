@@ -121,13 +121,14 @@ def reservar_area(area: str, data: str, tool_context: ToolContext) -> dict:
                 "mensagem": "A reserva gera cobrança e aguarda a aprovação do morador no aplicativo.",
             }
         if not confirmacao.confirmed:
-            return {"status": "negada", "mensagem": "O morador não aprovou a reserva. Nada foi gravado."}
+            return {"status": "negada", "mensagem": "Você não aprovou a cobrança, então a reserva não foi feita."}
 
     reserva = condominio.criar_reserva(_apartamento(tool_context), item["id"], data)
     if reserva is None:
         return {"erro": f"A área {item['nome']} já está ocupada em {data}."}
     return {
         "status": "reservada",
+        "mensagem": "Reserva gravada. Não há mais nada pendente para ela.",
         "reserva": reserva,
         "cobranca": item["taxa"] if item["taxa"] > 0 else None,
     }
@@ -191,10 +192,14 @@ def autorizar_visitante(nome: str, data: str, tool_context: ToolContext) -> dict
             "mensagem": "A liberação aguarda a aprovação do morador no aplicativo.",
         }
     if not confirmacao.confirmed:
-        return {"status": "negada", "mensagem": "O morador não aprovou a liberação. Nada foi gravado."}
+        return {"status": "negada", "mensagem": "Você não aprovou a liberação, então a entrada não foi autorizada."}
 
     visitante = condominio.autorizar_visitante(_apartamento(tool_context), nome, data)
-    return {"status": "autorizado", "visitante": visitante}
+    return {
+        "status": "autorizado",
+        "mensagem": "Entrada autorizada e gravada.",
+        "visitante": visitante,
+    }
 
 
 # ------------------------------------------------------------- regulamento
