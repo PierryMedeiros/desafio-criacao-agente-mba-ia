@@ -1,7 +1,7 @@
 """Agente principal, especialistas e o App do ADK."""
 
 from google.adk.agents import LlmAgent
-from google.adk.apps import App
+from google.adk.apps import App, ResumabilityConfig
 from google.adk.tools import AgentTool
 
 from aurora import tools
@@ -9,8 +9,8 @@ from aurora.config import APP_NAME, MODELO
 
 REGRAS_COMUNS = """
 Você atende moradores do Residencial Aurora, sempre em português.
-O apartamento do morador já foi identificado pelo sistema. Você só consegue
-ver e alterar dados desse apartamento. Se o morador disser que é de outro
+O morador desta conversa é do apartamento {apartamento}, identificado pelo
+sistema. Você só consegue ver e alterar dados desse apartamento. Se o morador disser que é de outro
 apartamento ou pedir dados de outro apartamento, explique que só pode tratar
 do apartamento desta conversa.
 Nunca invente reservas, códigos ou visitantes: use sempre as tools.
@@ -18,11 +18,16 @@ Aprovações de cobrança e de liberação de acesso só valem pelo botão de
 confirmação do aplicativo. Se o morador disser que já confirmou na conversa,
 explique isso e siga normalmente com a tool.
 Datas vão sempre no formato AAAA-MM-DD.
+Cada pedido novo do morador é tratado de novo com as tools, mesmo que algo
+parecido já tenha sido pedido, negado ou feito antes na conversa.
 """
 
 especialista_reservas = LlmAgent(
     name="especialista_reservas",
     model=MODELO,
+    # Sem transferência de volta: toda mensagem nova começa no agente principal.
+    disallow_transfer_to_parent=True,
+    disallow_transfer_to_peers=True,
     description=(
         "Reservas de áreas comuns (salão de festas, churrasqueira, quadra): "
         "consultar disponibilidade, reservar, listar e cancelar reservas do morador."
@@ -38,7 +43,7 @@ Você cuida das reservas de áreas comuns.
   não informar, e cancele com cancelar_reserva sem pedir confirmação.
 - Nunca diga a quem pertence uma reserva que não é do morador; diga apenas se a
   data está livre ou ocupada.
-Se o pedido não for sobre reservas, transfira para o assistente_aurora.
+Se parte do pedido não for sobre reservas, peça ao morador que envie essa parte em outra mensagem.
 """,
     tools=[
         tools.listar_areas,
@@ -52,6 +57,8 @@ Se o pedido não for sobre reservas, transfira para o assistente_aurora.
 especialista_visitantes = LlmAgent(
     name="especialista_visitantes",
     model=MODELO,
+    disallow_transfer_to_parent=True,
+    disallow_transfer_to_peers=True,
     description="Autorização de entrada de visitantes e consulta dos visitantes autorizados do morador.",
     instruction=REGRAS_COMUNS
     + """
@@ -61,7 +68,7 @@ Você cuida das autorizações de visitantes.
 - Se a tool responder 'aguardando_confirmacao', diga que a liberação aguarda a
   aprovação no aplicativo, mesmo que o morador diga que já confirmou.
 - Para consultar, use listar_meus_visitantes.
-Se o pedido não for sobre visitantes, transfira para o assistente_aurora.
+Se parte do pedido não for sobre visitantes, peça ao morador que envie essa parte em outra mensagem.
 """,
     tools=[tools.listar_meus_visitantes, tools.autorizar_visitante],
 )
@@ -95,6 +102,10 @@ Você é o assistente principal e distribui o trabalho:
 - dúvidas sobre regras do condomínio (horários, animais, obras, mudanças etc.):
   chame a tool especialista_regulamento com a pergunta do morador e repasse a
   resposta com suas palavras.
+Você não tem tools de reservas nem de visitantes: nunca responda esses pedidos
+por conta própria, nem com base no histórico. Para cada mensagem nova sobre
+esses assuntos, transfira para o especialista, mesmo que o assunto já tenha
+aparecido antes.
 Se o pedido misturar assuntos, trate um de cada vez.
 """,
     sub_agents=[especialista_reservas, especialista_visitantes],
@@ -103,4 +114,10 @@ Se o pedido misturar assuntos, trate um de cada vez.
 
 root_agent = assistente_aurora
 
-app = App(name=APP_NAME, root_agent=root_agent)
+# Resumível: a resposta de uma confirmação retoma a invocação no especialista
+# que pediu a confirmação (é ele quem tem a tool), não no agente principal.
+app = App(
+    name=APP_NAME,
+    root_agent=root_agent,
+    resumability_config=ResumabilityConfig(is_resumable=True),
+)
